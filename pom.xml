@@ -11,7 +11,7 @@
     <url>https://aws.amazon.com/java</url>
 
     <scm>
-        <url>https://github.com/aws/aws-dynamodb-session-tomcat.git</url>
+        <url>https://github.com/andreimusca/aws-dynamodb-session-tomcat.git</url>
     </scm>
 
     <licenses>

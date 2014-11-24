@@ -14,25 +14,23 @@
  */
 package com.amazonaws.services.dynamodb.sessionmanager;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-
+import com.amazonaws.services.dynamodb.sessionmanager.util.DynamoUtils;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClient;
+import com.amazonaws.services.dynamodbv2.model.AttributeValue;
+import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest;
+import com.amazonaws.services.dynamodbv2.model.TableDescription;
 import org.apache.catalina.Container;
 import org.apache.catalina.Session;
 import org.apache.catalina.session.StandardSession;
 import org.apache.catalina.session.StoreBase;
 import org.apache.catalina.util.CustomObjectInputStream;
 
-import com.amazonaws.services.dynamodb.sessionmanager.util.DynamoUtils;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClient;
-import com.amazonaws.services.dynamodbv2.model.AttributeValue;
-import com.amazonaws.services.dynamodbv2.model.DescribeTableRequest;
-import com.amazonaws.services.dynamodbv2.model.TableDescription;
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Session store implementation that loads and stores HTTP sessions from Amazon
@@ -91,7 +89,7 @@ public class DynamoDBSessionStore extends StoreBase {
         TableDescription table = dynamo.describeTable(new DescribeTableRequest().withTableName(sessionTableName)).getTable();
         long itemCount = table.getItemCount();
 
-        return (int)itemCount;
+        return (int) itemCount;
     }
 
     @Override
@@ -107,10 +105,12 @@ public class DynamoDBSessionStore extends StoreBase {
             return null;
         }
 
-
-        Session session = getManager().createSession(id);
-        session.setCreationTime(Long.parseLong(item.get(SessionTableAttributes.CREATED_AT_ATTRIBUTE).getN()));
-
+        StandardSession session = new StandardSession(null);
+        session.setId(id, false);
+        session.setValid(true);
+        session.setMaxInactiveInterval(manager.getMaxInactiveInterval());
+        long creationTime = Long.parseLong(item.get(SessionTableAttributes.CREATED_AT_ATTRIBUTE).getN());
+        session.setCreationTime(creationTime);
 
         ByteBuffer byteBuffer = item.get(SessionTableAttributes.SESSION_DATA_ATTRIBUTE).getB();
         ByteArrayInputStream inputStream = new ByteArrayInputStream(byteBuffer.array());
@@ -123,24 +123,53 @@ public class DynamoDBSessionStore extends StoreBase {
 
             readObject = objectInputStream.readObject();
         } finally {
-            try { objectInputStream.close(); } catch (Exception e) {}
+            try {
+                objectInputStream.close();
+            } catch (Exception e) {
+            }
         }
 
         if (readObject instanceof Map<?, ?>) {
-            Map<String, Object> sessionAttributeMap = (Map<String, Object>)readObject;
+            Map<String, Object> sessionAttributeMap = (Map<String, Object>) readObject;
 
             for (String s : sessionAttributeMap.keySet()) {
-                ((StandardSession)session).setAttribute(s, sessionAttributeMap.get(s));
+                session.setAttribute(s, sessionAttributeMap.get(s), false);
             }
         } else {
             throw new RuntimeException("Error: Unable to unmarshall session attributes from DynamoDB store");
         }
 
-
         keys.add(id);
-        manager.add(session);
+        return adapt(session);
+    }
 
-        return session;
+    private Session adapt(StandardSession dynamoSession) {
+        ObjectInputStream ois = null;
+        try {
+            ByteArrayOutputStream serializedDynamoSession = new ByteArrayOutputStream();
+            ObjectOutputStream oos = new ObjectOutputStream(serializedDynamoSession);
+            dynamoSession.writeObjectData(oos);
+            oos.close();
+            serializedDynamoSession.close();
+            StandardSession session =
+                    (StandardSession) manager.createEmptySession();
+            ois = new ObjectInputStream(new ByteArrayInputStream(serializedDynamoSession.toByteArray()));
+            session.readObjectData(ois);
+            return (session);
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } finally {
+            // Close the input stream
+            try {
+                ois.close();
+            } catch (Exception e) {
+                // Ignore
+            }
+        }
+        //manager.add(session);
+        return dynamoSession;
     }
 
     @Override
